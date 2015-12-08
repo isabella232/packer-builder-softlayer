@@ -1,3 +1,5 @@
+This repository is a fork of [leonidlm/packer-builder-softlayer](https://github.com/leonidlm/packer-builder-softlayer).
+
 # SoftLayer Builder (for packer.io)
 
 The softlayer builder is able to create new images for use with SoftLayer. The builder takes a source image (identified by it's global ID or reference name), runs any provisioning necessary on the image after launching it, then snapshots it into a reusable image. This reusable image can then be used as the foundation of new servers that are launched within SoftLayer.
