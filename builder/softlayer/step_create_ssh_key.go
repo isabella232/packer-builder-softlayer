@@ -10,13 +10,11 @@ import (
 	"log"
 	"strings"
 
-	"code.google.com/p/gosshold/ssh"
 	"github.com/mitchellh/multistep"
 	"github.com/mitchellh/packer/common/uuid"
 	"github.com/mitchellh/packer/packer"
+	"golang.org/x/crypto/ssh"
 )
-
-// TODO: get rid of gosshold
 
 type stepCreateSshKey struct {
 	keyId          int64
@@ -34,6 +32,7 @@ func (self *stepCreateSshKey) Run(state multistep.StateBag) multistep.StepAction
 			return multistep.ActionHalt
 		}
 
+		state.Put("ssh_key_id", self.keyId)
 		state.Put("ssh_private_key", string(privateKeyBytes))
 
 		return multistep.ActionContinue
