@@ -5,26 +5,26 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"strings"
 
-	"code.google.com/p/gosshold/ssh"
 	"github.com/mitchellh/multistep"
 	"github.com/mitchellh/packer/common/uuid"
 	"github.com/mitchellh/packer/packer"
+	"golang.org/x/crypto/ssh"
 )
-
-// TODO: get rid of gosshold
 
 type stepCreateSshKey struct {
 	keyId          int64
+	temporary      bool
 	PrivateKeyFile string
 }
 
 func (self *stepCreateSshKey) Run(state multistep.StateBag) multistep.StepAction {
 	ui := state.Get("ui").(packer.Ui)
+	client := state.Get("client").(*SoftlayerClient)
 	if self.PrivateKeyFile != "" {
 		ui.Say(fmt.Sprintf("Reading private key file (%s)...", self.PrivateKeyFile))
 
@@ -34,19 +34,38 @@ func (self *stepCreateSshKey) Run(state multistep.StateBag) multistep.StepAction
 			return multistep.ActionHalt
 		}
 
+		if self.keyId == 0 {
+			key, err := ssh.ParseRawPrivateKey(privateKeyBytes)
+			if err != nil {
+				return self.error(state, ui, err)
+			}
+
+			rsaKey, ok := key.(*rsa.PrivateKey)
+			if !ok {
+				return self.error(state, ui, errors.New("the private key is not RSA one"))
+			}
+
+			keyId, err := self.uploadSshKey(client, rsaKey)
+			if err != nil {
+				return self.error(state, ui, err)
+			}
+
+			self.keyId = keyId
+		} else {
+			ui.Say(fmt.Sprintf("Attaching existing sshkey ID to the instance (%d)...", self.keyId))
+		}
+
+		state.Put("ssh_key_id", self.keyId)
 		state.Put("ssh_private_key", string(privateKeyBytes))
 
 		return multistep.ActionContinue
 	}
 
-	client := state.Get("client").(*SoftlayerClient)
 	ui.Say("Creating temporary ssh key for the instance...")
 
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2014)
 	if err != nil {
-		ui.Error(err.Error())
-		state.Put("error", err)
-		return multistep.ActionHalt
+		return self.error(state, ui, err)
 	}
 
 	// ASN.1 DER encoded form
@@ -57,28 +76,16 @@ func (self *stepCreateSshKey) Run(state multistep.StateBag) multistep.StepAction
 		Bytes:   privDer,
 	}
 
+	keyId, err := self.uploadSshKey(client, rsaKey)
+	if err != nil {
+		return self.error(state, ui, err)
+	}
+
+	self.temporary = true
+	self.keyId = keyId
+
 	// Set the private key in the statebag for later
 	state.Put("ssh_private_key", string(pem.EncodeToMemory(&privBlk)))
-
-	pub, err := ssh.NewPublicKey(&rsaKey.PublicKey)
-	if err != nil {
-		ui.Error(err.Error())
-		state.Put("error", err)
-		return multistep.ActionHalt
-	}
-
-	publicKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
-
-	// The name of the public key
-	label := fmt.Sprintf("packer-%s", uuid.TimeOrderedUUID())
-	keyId, err := client.UploadSshKey(label, publicKey)
-	if err != nil {
-		ui.Error(err.Error())
-		state.Put("error", err)
-		return multistep.ActionHalt
-	}
-
-	self.keyId = keyId
 	state.Put("ssh_key_id", keyId)
 
 	ui.Say(fmt.Sprintf("Created SSH key with id '%d'", keyId))
@@ -87,8 +94,7 @@ func (self *stepCreateSshKey) Run(state multistep.StateBag) multistep.StepAction
 }
 
 func (self *stepCreateSshKey) Cleanup(state multistep.StateBag) {
-	// If no key name is set, then we never created it, so just return
-	if self.keyId == 0 {
+	if !self.temporary {
 		return
 	}
 
@@ -99,7 +105,34 @@ func (self *stepCreateSshKey) Cleanup(state multistep.StateBag) {
 	err := client.DestroySshKey(self.keyId)
 
 	if err != nil {
-		log.Printf("Error cleaning up ssh key: %v", err.Error())
-		ui.Error(fmt.Sprintf("Error cleaning up ssh key. Please delete the key (%d) manually", self.keyId))
+		self.error(nil, ui, fmt.Errorf("Error cleaning up ssh key. Please delete the key (%d) manually", self.keyId))
 	}
+}
+
+func (self *stepCreateSshKey) uploadSshKey(client *SoftlayerClient, rsaKey *rsa.PrivateKey) (keyId int64, err error) {
+	pub, err := ssh.NewPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		return 0, err
+	}
+
+	publicKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
+
+	// The name of the public key
+	label := fmt.Sprintf("packer-%s", uuid.TimeOrderedUUID())
+	keyId, err = client.UploadSshKey(label, publicKey)
+	if err != nil {
+		return 0, err
+	}
+
+	return keyId, nil
+}
+
+func (self *stepCreateSshKey) error(state multistep.StateBag, ui packer.Ui, err error) multistep.StepAction {
+	if ui != nil {
+		ui.Error(err.Error())
+	}
+	if state != nil {
+		state.Put("error", err)
+	}
+	return multistep.ActionHalt
 }

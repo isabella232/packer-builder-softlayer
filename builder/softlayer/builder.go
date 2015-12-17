@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/mitchellh/multistep"
@@ -38,6 +39,8 @@ type Config struct {
 	InstanceNetworkSpeed int    `mapstructure:"instance_network_speed"`
 	InstanceDiskCapacity int    `mapstructure:"instance_disk_capacity"`
 
+	SSHKeyID int64 `mapstructure:"ssh_key_id"`
+
 	StateTimeout time.Duration `mapstructure:"instance_state_timeout"`
 
 	ctx interpolate.Context
@@ -66,15 +69,22 @@ func (self *Builder) Prepare(raws ...interface{}) ([]string, error) {
 	}
 
 	errs := &packer.MultiError{}
-	// Assign default values if possible
+	// Assign default values if possible.
 	if self.config.APIKey == "" {
-		// Default to environment variable for api_key, if it exists
+		// Default to environment variable for api_key, if it exists.
 		self.config.APIKey = os.Getenv("SOFTLAYER_API_KEY")
 	}
 
 	if self.config.Username == "" {
-		// Default to environment variable for client_id, if it exists
+		// Default to environment variable for client_id, if it exists.
 		self.config.Username = os.Getenv("SOFTLAYER_USER_NAME")
+	}
+
+	if self.config.SSHKeyID == 0 {
+		// Default to environment variable for sshkey_id, if it exists.
+		if id, err := strconv.ParseInt(os.Getenv("SOFTLAYER_SSHKEY_ID"), 10, 64); err == nil {
+			self.config.SSHKeyID = id
+		}
 	}
 
 	if self.config.DatacenterName == "" {
@@ -197,6 +207,7 @@ func (self *Builder) Run(ui packer.Ui, hook packer.Hook, cache packer.Cache) (pa
 	steps := []multistep.Step{
 		&stepCreateSshKey{
 			PrivateKeyFile: self.config.SSHPrivateKey,
+			keyId:          self.config.SSHKeyID,
 		},
 		new(stepCreateInstance),
 		new(stepWaitforInstance),
